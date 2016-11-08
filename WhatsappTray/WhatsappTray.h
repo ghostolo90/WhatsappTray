@@ -1,5 +1,6 @@
 #define NAME L"WhatsappTrayHook"
 #define WHATSAPP_CLIENT_NAME L"WhatsApp"
+#define FILEPATH_MAX_LENGTH 2000
 
 #define WM_ADDTRAY  0x0401
 #define WM_REMTRAY  0x0402
@@ -12,5 +13,5 @@
 
 #define DLLIMPORT __declspec(dllexport)
 
-BOOL DLLIMPORT RegisterHook(HMODULE);
+BOOL DLLIMPORT RegisterHook(HMODULE, DWORD threadId, wchar_t* filepath);
 void DLLIMPORT UnRegisterHook();

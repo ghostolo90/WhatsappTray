@@ -22,6 +22,8 @@
 #include <windows.h>
 #include "WhatsappTray.h"
 #include "resource.h"
+#include <string>
+#include <fstream>
 
 #define MAXTRAYITEMS 64
 
@@ -30,6 +32,27 @@ static HMODULE _hLib;
 static HWND _hwndHook;
 static HWND _hwndItems[MAXTRAYITEMS];
 static HWND _hwndForMenu;
+static std::wstring _filepath;
+
+HMODULE GetCurrentModule()
+{ // NB: XP+ solution!
+	HMODULE hModule = NULL;
+	GetModuleHandleEx(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, (LPCTSTR)GetCurrentModule, &hModule);
+	return hModule;
+}
+
+// Da es nur sehr schwer ist, Daten in die Dll zu bekommen lese ich den Pfad jetzt direkt in der Dll aus.
+void GetPath()
+{
+	wchar_t filepathArray[FILEPATH_MAX_LENGTH];
+	GetModuleFileName(GetCurrentModule(), filepathArray, FILEPATH_MAX_LENGTH);
+
+	_filepath = std::wstring(filepathArray);
+	size_t cutpos = _filepath.find_last_of(L'\\', _filepath.length());
+	_filepath = _filepath.substr(0, cutpos + 1);
+
+	_filepath.append(L"WT_log.txt");
+}
 
 int FindInTray(HWND hwnd) {
 	for (int i = 0; i < MAXTRAYITEMS; i++) {
@@ -211,6 +234,8 @@ LRESULT CALLBACK HookWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 			}
 			break;
 		case WM_ADDTRAY:
+			//MessageBox(NULL, L"HookWndProc() WM_ADDTRAY", L"WhatsappTray", MB_OK | MB_ICONINFORMATION);
+
 			MinimizeWindowToTray((HWND)lParam);
 			break;
 		case WM_REMTRAY:
@@ -249,29 +274,67 @@ LRESULT CALLBACK HookWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) 
 	return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLine, int iCmdShow) {
+// TODO(niedrige Prio): Manifestdatei, damit "Operating System context" nicht Windows Vista ist. Den Kontext kann ich mit dem Taskmanager anschaun
+// http://stackoverflow.com/questions/15808967/application-running-in-windows-vista-context-by-default
+// http://stackoverflow.com/questions/28347039/how-do-i-get-manifest-file-to-generate-in-visual-studio-2013
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLine, int iCmdShow)
+{
 	WNDCLASS wc;
 	MSG msg;
 
 	_hInstance = hInstance;
 	_hwndHook = FindWindow(NAME, NAME);
-	if (_hwndHook) {
-		if (strstr(szCmdLine, "--exit")) {
+	if (_hwndHook)
+	{
+		if (strstr(szCmdLine, "--exit"))
+		{
 			SendMessage(_hwndHook, WM_CLOSE, 0, 0);
 		}
-		else {
+		else
+		{
 			MessageBox(NULL, L"WhatsappTray is already running.", L"WhatsappTray", MB_OK | MB_ICONINFORMATION);
 		}
 		return 0;
 	}
-	if (!(_hLib = LoadLibrary(L"Hook.dll"))) {
+
+	GetPath();
+
+	std::wofstream logfile;
+	logfile.open(_filepath.c_str(), std::ios::app);
+
+	if (!(_hLib = LoadLibrary(L"Hook.dll")))
+	{
 		MessageBox(NULL, L"Error loading Hook.dll.", L"WhatsappTray", MB_OK | MB_ICONERROR);
 		return 0;
 	}
-	if (!RegisterHook(_hLib)) {
+	logfile << L"\nLoadLibrary(Hook.dll) successful.";
+
+	// Damit nicht alle Prozesse gehookt werde, verwende ich jetzt die ThreadID des WhatsApp-Clients.
+	HWND hwndWhatsapp = FindWindow(NULL, WHATSAPP_CLIENT_NAME);
+	if (hwndWhatsapp == NULL)
+	{
+		MessageBox(NULL, L"WhatsApp-Window not found.", L"WhatsappTray", MB_OK | MB_ICONERROR);
+		return 0;
+	}
+	logfile << L"\nFindWindow successful. [0x" << std::hex << hwndWhatsapp << "]";
+
+	DWORD threadId = GetWindowThreadProcessId(hwndWhatsapp, NULL);
+	if (threadId == NULL)
+	{
+		MessageBox(NULL, L"ThreadID of WhatsApp-Window not found.", L"WhatsappTray", MB_OK | MB_ICONERROR);
+		return 0;
+	}
+	logfile << L"\nGetWindowThreadProcessId successful. [0x" << std::hex << threadId << "]";
+
+	if (RegisterHook(_hLib, threadId, L"") == false)
+	{
 		MessageBox(NULL, L"Error setting hook procedure.", L"WhatsappTray", MB_OK | MB_ICONERROR);
 		return 0;
 	}
+	logfile << L"\nRegister Hook successful.";
+
+	logfile.close();
+
 	wc.style         = 0;
 	wc.lpfnWndProc   = HookWndProc;
 	wc.cbClsExtra    = 0;
@@ -282,19 +345,23 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLine
 	wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
 	wc.lpszMenuName  = NULL;
 	wc.lpszClassName = NAME;
-	if (!RegisterClass(&wc)) {
+	if (!RegisterClass(&wc))
+	{
 		MessageBox(NULL, L"Error creating window class", L"WhatsappTray", MB_OK | MB_ICONERROR);
 		return 0;
 	}
-	if (!(_hwndHook = CreateWindow(NAME, NAME, WS_OVERLAPPED, 0, 0, 0, 0, (HWND)NULL, (HMENU)NULL, (HINSTANCE)hInstance, (LPVOID)NULL))) {
+	if (!(_hwndHook = CreateWindow(NAME, NAME, WS_OVERLAPPED, 0, 0, 0, 0, (HWND)NULL, (HMENU)NULL, (HINSTANCE)hInstance, (LPVOID)NULL)))
+	{
 		MessageBox(NULL, L"Error creating window", L"WhatsappTray", MB_OK | MB_ICONERROR);
 		return 0;
 	}
-	for (int i = 0; i < MAXTRAYITEMS; i++) {
+	for (int i = 0; i < MAXTRAYITEMS; i++)
+	{
 		_hwndItems[i] = NULL;
 	}
-	
-	while (IsWindow(_hwndHook) && GetMessage(&msg, _hwndHook, 0, 0)) {
+
+	while (IsWindow(_hwndHook) && GetMessage(&msg, _hwndHook, 0, 0))
+	{
 		TranslateMessage(&msg);
 		DispatchMessage(&msg);
 	}
